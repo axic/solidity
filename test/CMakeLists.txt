@@ -18,7 +18,16 @@ set(sources
     TestCaseReader.cpp
     TestCaseReader.h
 )
-detect_stray_source_files("${sources}" ".")
+
+# Compiled into a separate static library (evmprecompiles) rather than into
+# soltest directly, so that evmone's bundled evmc headers stay confined to this
+# translation unit and do not clash with Solidity's vendored test/evmc.
+set(evmone_precompiles_sources
+    EVMPrecompiles.cpp
+    EVMPrecompiles.h
+)
+
+detect_stray_source_files("${sources};${evmone_precompiles_sources}" ".")
 
 set(contracts_sources
     contracts/AuctionRegistrar.cpp
@@ -222,6 +231,25 @@ set(yul_phaser_sources
 )
 detect_stray_source_files("${yul_phaser_sources}" "yulPhaser/")
 
+# Builds evmone::state from source (the release artifacts do not ship it) so its
+# call_precompile() can back the EVM precompiles used by EVMHost. See
+# cmake/evmone.cmake.
+include(evmone)
+
+# Wrapper library exposing evmone's precompiles through a plain evmc C API (see
+# test/EVMPrecompiles.{h,cpp}). evmone::state is linked PRIVATE on purpose: soltest
+# gets the symbols but not evmone's include directories, keeping evmone's copy of
+# the evmc C++ headers out of every other test translation unit.
+add_library(evmprecompiles STATIC ${evmone_precompiles_sources})
+target_include_directories(evmprecompiles PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(evmprecompiles PRIVATE evmone::state)
+if(PEDANTIC AND NOT MSVC)
+    # EVMPrecompiles.cpp includes evmone's third-party headers, which are not
+    # written against Solidity's strict warning set. Keep their warnings visible
+    # but non-fatal for this single translation unit instead of failing -Werror.
+    target_compile_options(evmprecompiles PRIVATE -Wno-error)
+endif()
+
 add_executable(soltest ${sources}
     ${contracts_sources}
     ${libsolutil_sources}
@@ -233,7 +261,7 @@ add_executable(soltest ${sources}
     ${solcli_sources}
     ${yul_phaser_sources}
 )
-target_link_libraries(soltest PRIVATE solcli libsolc yul solidity smtutil solutil phaser Boost::boost yulInterpreter evmasm Boost::filesystem Boost::program_options Boost::unit_test_framework evmc)
+target_link_libraries(soltest PRIVATE solcli libsolc yul solidity smtutil solutil phaser Boost::boost yulInterpreter evmasm Boost::filesystem Boost::program_options Boost::unit_test_framework evmc evmprecompiles)
 
 
 # Special compilation flag for Visual Studio (version 2019 at least affected)
